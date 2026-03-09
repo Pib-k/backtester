@@ -1,3 +1,4 @@
+use csv::Reader;
 use csv::Writer;
 use rand::RngExt;
 use serde::Serialize;
@@ -5,9 +6,10 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::*;
 use std::os::*;
+use std::result;
 use std::time::*;
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 struct Tick {
     timestamp: u64,
     stock_abr: String,
@@ -32,7 +34,7 @@ fn main() {
     };
     let mut writer = Writer::from_writer(file);
     let mut rng = rand::rng();
-    let stocks = ["TSLA, NVDIA, APL, AMZN, GOOG"];
+    let stocks = ["TSLA", "NVDIA", "APL", "AMZN", "GOOG"];
 
     let mut current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -54,7 +56,37 @@ fn main() {
 
     println!("FINISHED CREATING CSV FILE");
 
-    let mut f = File::open(&file_path).unwrap();
+    let mut reader = Reader::from_path(&file_path).unwrap();
     let window_size = 50;
-    let mut window: VecDeque<f64> = VecDeque::new();
+    let mut window: VecDeque<Tick> = VecDeque::new();
+    let mut sum_prices: f64 = 0.0;
+
+    for result in reader.records() {
+        let record = match result {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("{}", e);
+                continue;
+            }
+        };
+        let tick = Tick {
+            timestamp: record[0].parse::<u64>().unwrap_or(0),
+            stock_abr: record[1].to_string(),
+            price: record[2].parse::<f64>().unwrap_or(0.0),
+            volume: record[3].parse::<f64>().unwrap_or(0.0),
+        };
+
+        sum_prices += tick.price;
+        window.push_back(tick);
+
+        if window.len() > window_size {
+            if let Some(removed_tick) = window.pop_front() {
+                sum_prices -= removed_tick.price;
+            }
+        }
+
+        let rolling_average = sum_prices / window.len() as f64;
+        println!("{:?} with RA: {}", window, rolling_average);
+        break;
+    }
 }
