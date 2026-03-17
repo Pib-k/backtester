@@ -1,15 +1,19 @@
 use csv::Reader;
 use csv::Writer;
 use rand::RngExt;
+use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs::File;
+use std::io::BufReader;
+use std::io::BufWriter;
+use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
 use std::time::*;
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Deserialize)]
 struct Tick {
     timestamp: u64,
     ticker: String,
@@ -23,48 +27,45 @@ struct TickerState {
 }
 
 fn main() {
-    let file_path = "output.csv";
+    let file_path = "output/output.csv";
+    let bin_path = "output/output.bin";
     let num_rows = 10_000_000;
 
     if !Path::new(file_path).exists() {
         create_csv(num_rows, file_path);
     }
 
-    let mut reader = Reader::from_path(&file_path).unwrap();
+    if !Path::new(bin_path).exists() {
+        convert_csv_to_bin(file_path, bin_path);
+    }
+
+    let file = File::open(bin_path).unwrap();
+    let mut reader = BufReader::new(file);
+    let mut rows_processed = 0;
+
     let window_size = 50;
     let mut market_state: HashMap<String, TickerState> = HashMap::new();
-
     let start_time = Instant::now();
 
-    for result in reader.records() {
-        let record = match result {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("{}", e);
-                continue;
-            }
-        };
-
-        let ticker = record[1].to_string();
-        let price = record[2].parse::<f64>().unwrap_or(0.0);
-
-        let state = market_state.entry(ticker).or_insert(TickerState {
+    while let Ok(tick) = rmp_serde::decode::from_read::<_, Tick>(&mut reader) {
+        let state = market_state.entry(tick.ticker).or_insert(TickerState {
             window: VecDeque::with_capacity(window_size + 1),
             sum_prices: 0.0,
         });
 
-        state.sum_prices += price;
-        state.window.push_back(price);
+        state.sum_prices += tick.price;
+        state.window.push_back(tick.price);
 
         if state.window.len() > window_size {
             if let Some(removed_price) = state.window.pop_front() {
                 state.sum_prices -= removed_price;
             }
         }
+        rows_processed += 1;
     }
 
     let duration = start_time.elapsed();
-    println!("Processed {} rows in: {:?}", num_rows, duration);
+    println!("Processed {} rows in: {:.4?}", rows_processed, duration);
 
     for (ticker, state) in market_state.iter() {
         let final_ma = state.sum_prices / state.window.len() as f64;
@@ -107,4 +108,25 @@ fn create_csv(num_rows: i32, file_path: &str) {
     writer.flush().unwrap();
 
     println!("FINISHED CREATING CSV FILE");
+}
+
+fn convert_csv_to_bin(csv_path: &str, bin_path: &str) {
+    let mut csv_reader = Reader::from_path(csv_path).unwrap();
+
+    let bin_file = File::create(bin_path).unwrap();
+    let mut bin_writer = BufWriter::new(bin_file);
+
+    for result in csv_reader.records() {
+        if let Ok(record) = result {
+            let tick = Tick {
+                timestamp: record[0].parse().unwrap_or(0),
+                ticker: record[1].to_string(),
+                price: record[2].parse().unwrap_or(0.0),
+                volume: record[3].parse().unwrap_or(0.0),
+            };
+            rmp_serde::encode::write(&mut bin_writer, &tick).unwrap();
+        }
+    }
+    bin_writer.flush().unwrap();
+    println!("CONVERSION COMPLETE");
 }
