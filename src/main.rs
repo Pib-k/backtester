@@ -6,11 +6,8 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::BufReader;
-use std::io::BufWriter;
-use std::io::Write;
+use std::io::*;
 use std::path::Path;
-use std::time::Instant;
 use std::time::*;
 
 #[derive(Serialize, Debug, Deserialize)]
@@ -40,7 +37,9 @@ fn main() {
     }
 
     let file = File::open(bin_path).unwrap();
-    let mut reader = BufReader::new(file);
+    let mmap = unsafe { memmap::MmapOptions::new().map(&file).unwrap() };
+
+    let mut reader = Cursor::new(&mmap);
     let mut rows_processed = 0;
 
     let window_size = 50;
