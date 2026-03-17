@@ -2,25 +2,77 @@ use csv::Reader;
 use csv::Writer;
 use rand::RngExt;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::*;
-use std::os::*;
-use std::result;
+use std::path::Path;
+use std::time::Instant;
 use std::time::*;
 
 #[derive(Serialize, Debug)]
 struct Tick {
     timestamp: u64,
-    stock_abr: String,
+    ticker: String,
     price: f64,
     volume: f64,
+}
+
+struct TickerState {
+    window: VecDeque<f64>,
+    sum_prices: f64,
 }
 
 fn main() {
     let file_path = "output.csv";
     let num_rows = 10_000_000;
 
+    if !Path::new(file_path).exists() {
+        create_csv(num_rows, file_path);
+    }
+
+    let mut reader = Reader::from_path(&file_path).unwrap();
+    let window_size = 50;
+    let mut market_state: HashMap<String, TickerState> = HashMap::new();
+
+    let start_time = Instant::now();
+
+    for result in reader.records() {
+        let record = match result {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("{}", e);
+                continue;
+            }
+        };
+
+        let ticker = record[1].to_string();
+        let price = record[2].parse::<f64>().unwrap_or(0.0);
+
+        let state = market_state.entry(ticker).or_insert(TickerState {
+            window: VecDeque::with_capacity(window_size + 1),
+            sum_prices: 0.0,
+        });
+
+        state.sum_prices += price;
+        state.window.push_back(price);
+
+        if state.window.len() > window_size {
+            if let Some(removed_price) = state.window.pop_front() {
+                state.sum_prices -= removed_price;
+            }
+        }
+    }
+
+    let duration = start_time.elapsed();
+    println!("Processed {} rows in: {:?}", num_rows, duration);
+
+    for (ticker, state) in market_state.iter() {
+        let final_ma = state.sum_prices / state.window.len() as f64;
+        println!("Final Moving Average for {}: {:.2}", ticker, final_ma);
+    }
+}
+
+fn create_csv(num_rows: i32, file_path: &str) {
     println!(
         "CREATING CSV FILE WITH {} ROWS OF STOCK DATA TO {}",
         num_rows, file_path
@@ -44,7 +96,7 @@ fn main() {
     for _n in 0..num_rows {
         let tick = Tick {
             timestamp: current_time,
-            stock_abr: stocks[rng.random_range(0..stocks.len())].to_string(),
+            ticker: stocks[rng.random_range(0..stocks.len())].to_string(),
             price: rng.random_range(100.0..500.0),
             volume: rng.random_range(1.0..100.0),
         };
@@ -55,38 +107,4 @@ fn main() {
     writer.flush().unwrap();
 
     println!("FINISHED CREATING CSV FILE");
-
-    let mut reader = Reader::from_path(&file_path).unwrap();
-    let window_size = 50;
-    let mut window: VecDeque<Tick> = VecDeque::new();
-    let mut sum_prices: f64 = 0.0;
-
-    for result in reader.records() {
-        let record = match result {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("{}", e);
-                continue;
-            }
-        };
-        let tick = Tick {
-            timestamp: record[0].parse::<u64>().unwrap_or(0),
-            stock_abr: record[1].to_string(),
-            price: record[2].parse::<f64>().unwrap_or(0.0),
-            volume: record[3].parse::<f64>().unwrap_or(0.0),
-        };
-
-        sum_prices += tick.price;
-        window.push_back(tick);
-
-        if window.len() > window_size {
-            if let Some(removed_tick) = window.pop_front() {
-                sum_prices -= removed_tick.price;
-            }
-        }
-
-        let rolling_average = sum_prices / window.len() as f64;
-        println!("{:?} with RA: {}", window, rolling_average);
-        break;
-    }
 }
