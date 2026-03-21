@@ -1,22 +1,17 @@
-use csv::Reader;
-use csv::Writer;
+use bytemuck::{Pod, Zeroable};
+use csv::{Reader, Writer};
 use rand::RngExt;
-use serde::Deserialize;
-use serde::Serialize;
-use std::collections::HashMap;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
-use std::io::BufReader;
-use std::io::BufWriter;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::Path;
-use std::time::Instant;
-use std::time::*;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-#[derive(Serialize, Debug, Deserialize)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+#[repr(C)]
 struct Tick {
     timestamp: u64,
-    ticker: String,
+    ticker: [u8; 8],
     price: f64,
     volume: f64,
 }
@@ -40,14 +35,15 @@ fn main() {
     }
 
     let file = File::open(bin_path).unwrap();
-    let mut reader = BufReader::new(file);
-    let mut rows_processed = 0;
+    let mmap = unsafe { memmap2::MmapOptions::new().map(&file).unwrap() };
 
     let window_size = 50;
-    let mut market_state: HashMap<String, TickerState> = HashMap::new();
+    let mut market_state: HashMap<[u8; 8], TickerState> = HashMap::new();
     let start_time = Instant::now();
+    let ticks: &[Tick] = bytemuck::cast_slice(&mmap);
+    let mut rows_processed = 0;
 
-    while let Ok(tick) = rmp_serde::decode::from_read::<_, Tick>(&mut reader) {
+    for tick in ticks {
         let state = market_state.entry(tick.ticker).or_insert(TickerState {
             window: VecDeque::with_capacity(window_size + 1),
             sum_prices: 0.0,
@@ -67,7 +63,11 @@ fn main() {
     let duration = start_time.elapsed();
     println!("Processed {} rows in: {:.4?}", rows_processed, duration);
 
-    for (ticker, state) in market_state.iter() {
+    for (ticker_bytes, state) in market_state.iter() {
+        let ticker = std::str::from_utf8(ticker_bytes)
+            .unwrap()
+            .trim_matches(char::from(0));
+
         let final_ma = state.sum_prices / state.window.len() as f64;
         println!("Final Moving Average for {}: {:.2}", ticker, final_ma);
     }
@@ -85,7 +85,12 @@ fn create_csv(num_rows: i32, file_path: &str) {
             std::process::exit(1);
         }
     };
+
     let mut writer = Writer::from_writer(file);
+    writer
+        .write_record(&["timestamp", "ticker", "price", "volume"])
+        .unwrap();
+
     let mut rng = rand::rng();
     let stocks = ["TSLA", "NVDIA", "APL", "AMZN", "GOOG"];
 
@@ -95,19 +100,32 @@ fn create_csv(num_rows: i32, file_path: &str) {
         .as_secs();
 
     for _n in 0..num_rows {
-        let tick = Tick {
-            timestamp: current_time,
-            ticker: stocks[rng.random_range(0..stocks.len())].to_string(),
-            price: rng.random_range(100.0..500.0),
-            volume: rng.random_range(1.0..100.0),
-        };
-        writer.serialize(&tick).unwrap();
+        let ticker_str = stocks[rng.random_range(0..stocks.len())];
+        let price = rng.random_range(100.0..500.0);
+        let volume = rng.random_range(1.0..100.0);
+
+        writer
+            .write_record(&[
+                current_time.to_string(),
+                ticker_str.to_string(),
+                price.to_string(),
+                volume.to_string(),
+            ])
+            .unwrap();
+
         current_time += rng.random_range(0..3);
     }
 
     writer.flush().unwrap();
-
     println!("FINISHED CREATING CSV FILE");
+}
+
+fn string_to_ticker(s: &str) -> [u8; 8] {
+    let mut ticker = [0u8; 8];
+    let bytes = s.as_bytes();
+    let len = bytes.len().min(8);
+    ticker[..len].copy_from_slice(&bytes[..len]);
+    ticker
 }
 
 fn convert_csv_to_bin(csv_path: &str, bin_path: &str) {
@@ -120,11 +138,11 @@ fn convert_csv_to_bin(csv_path: &str, bin_path: &str) {
         if let Ok(record) = result {
             let tick = Tick {
                 timestamp: record[0].parse().unwrap_or(0),
-                ticker: record[1].to_string(),
+                ticker: string_to_ticker(&record[1]),
                 price: record[2].parse().unwrap_or(0.0),
                 volume: record[3].parse().unwrap_or(0.0),
             };
-            rmp_serde::encode::write(&mut bin_writer, &tick).unwrap();
+            bin_writer.write_all(bytemuck::bytes_of(&tick)).unwrap();
         }
     }
     bin_writer.flush().unwrap();
