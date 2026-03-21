@@ -5,7 +5,8 @@ use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
+use std::time::*;
 
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 #[repr(C)]

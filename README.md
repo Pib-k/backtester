@@ -7,7 +7,8 @@ _The Current Goal_: Parse and backtest 10GB of historical market data in under 1
 ### Phase 1: Text Parsing  
 
 * Approach: Read raw CSV strings and parse them into `f64` floats line-by-line using `serde` and standard standard File I/O.  
-* Bottleneck: UTF-8 string allocation and float parsing.  * Benchmark (10M rows): 2.5 seconds.
+* Bottleneck: UTF-8 string allocation and float parsing.  
+* Benchmark (10M rows): 2.5 seconds.
 
 ### Phase 2: Binary Formats  
 
