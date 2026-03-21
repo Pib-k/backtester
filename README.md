@@ -8,17 +8,23 @@ _The Current Goal_: Parse and backtest 10GB of historical market data in under 1
 
 * Approach: Read raw CSV strings and parse them into `f64` floats line-by-line using `serde` and standard standard File I/O.  
 * Bottleneck: UTF-8 string allocation and float parsing.  
-* Benchmark (10M rows): 2.5 seconds.
+* Benchmark (10M rows): ~2.5 seconds.
 
 ### Phase 2: Binary Formats  
 
 * Approach: Eliminated text parsing overhead by pre-converting the dataset to MessagePack (`rmp-serde`) and deserializing raw bytes.  
 * Bottleneck: Standard standard I/O streams and heap allocations for the `String` ticker field.  
-* Benchmark (10M rows): 1.75s
+* Benchmark (10M rows): ~1.75s
 
 ### Phase 3: Memory Mapping  
 
 * Approach: Bypass standard OS file reading by mapping the binary file directly into virtual memory using `memmap2`.  
+* Benchmark (10M rows): ~522ms
+
+### Phase 4: Parallelization  
+
+* Approach: Use `rayon` to run each ticker on a seperate CPU core.
+* Bottleneck/Hard Part: Statefulness: cannot calculate the moving average of chunk 2 without knowing the final state of chunk 1.
 * Benchmark (10M rows): TBD
 
 ## Hardware   * CPU: AMD Ryzen 7 7800X3D (8-Core, 16-Thread)  
